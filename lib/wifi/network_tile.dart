@@ -1,48 +1,58 @@
-import 'dart:convert';
-
 import 'package:dbus/dbus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:nm/nm.dart';
+import 'package:zenith_settings/models/network.dart';
 import 'package:zenith_settings/providers/network_manager.dart';
 import 'package:zenith_settings/providers/wifi.dart';
+import 'package:zenith_settings/wifi/network_details.dart';
+import 'package:zenith_settings/wifi/util.dart';
 import 'package:zenith_settings/wifi/wpa_auth_dialog.dart';
 
 class NetworkTile extends ConsumerWidget {
-  final NetworkManagerAccessPoint ap;
+  final Network network;
 
-  const NetworkTile({Key? key, required this.ap}) : super(key: key);
+  const NetworkTile({Key? key, required this.network}) : super(key: key);
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final activeAccessPoint = ref.watch(activeAccessPointProvider).mapOrNull(data: (ap) => ap.value);
-    final isConnected = activeAccessPoint == ap;
+    final device = ref.watch(primaryWirelessDeviceProvider)!;
+    final deviceState = ref.watch(deviceStateProvider(device));
 
-    final String ssid = utf8.decode(ap.ssid, allowMalformed: true);
+    NetworkManagerActiveConnection? activeConnection = ref.watch(deviceActiveConnectionProvider(device));
+    bool isActive = activeConnection?.id == network.ssid;
+
+    NetworkManagerActiveConnectionState? connectionState;
+    if (activeConnection != null && isActive) {
+      connectionState = ref.watch(activeConnectionStateProvider(activeConnection));
+    }
+
+    final ap = network.bestAccessPoint;
+
     final bool isProtected = ap.rsnFlags.isNotEmpty || ap.wpaFlags.isNotEmpty;
     final bool isWpa2Protected = ap.rsnFlags.isNotEmpty;
 
-    bool saved = ref.watch(connectionSettingsBySsidProvider(ssid)).maybeMap(data: (_) => true, orElse: () => false);
+    final bool isConnectionSaved = ref.watch(connectionSettingsBySsidProvider(network.ssid)).asData?.value != null;
 
-    Widget? subtitle;
-    if (isConnected) {
-      subtitle = const Text("Connected");
-    } else if (saved) {
-      subtitle = const Text("Saved");
-    }
+    String? connectionStatus = _getConnectionStatus(
+      isConnectionSaved,
+      deviceState,
+      connectionState,
+    );
+    Widget? subtitle = connectionStatus != null ? Text(connectionStatus) : null;
 
     Widget? leadingIcon;
-    if (isConnected) {
+    if (isActive) {
       leadingIcon = Icon(
-        _getSignalStrengthIconData(ap.strength),
+        getSignalStrengthIconData(ap.strength),
         color: Theme.of(context).indicatorColor,
       );
     } else {
-      leadingIcon = Icon(_getSignalStrengthIconData(ap.strength));
+      leadingIcon = Icon(getSignalStrengthIconData(ap.strength));
     }
 
     Widget? trailingIcon;
-    if (isConnected) {
+    if (isActive) {
       trailingIcon = Icon(
         Icons.settings_outlined,
         color: Theme.of(context).indicatorColor,
@@ -54,21 +64,44 @@ class NetworkTile extends ConsumerWidget {
     return ListTile(
       leading: leadingIcon,
       trailing: trailingIcon,
-      title: Text(ssid),
+      title: Text(network.ssid),
       subtitle: subtitle,
       minVerticalPadding: 15,
-      onTap: () => isConnected ? _viewConnection() : _connect(context, ref, ssid, isWpa2Protected),
+      onTap: () => isActive
+          ? _viewConnectionDetails(context, network.ssid)
+          : _connect(context, ref, network.ssid, isWpa2Protected),
     );
+  }
+
+  String? _getConnectionStatus(
+    bool isConnectionSaved,
+    NetworkManagerDeviceState? deviceState,
+    NetworkManagerActiveConnectionState? connectionState,
+  ) {
+    if (connectionState == NetworkManagerActiveConnectionState.activating) {
+      if (deviceState == NetworkManagerDeviceState.needAuth) {
+        return "Needs authentication...";
+      } else {
+        return "Connecting...";
+      }
+    } else if (connectionState == NetworkManagerActiveConnectionState.activated) {
+      return "Connected";
+    } else if (connectionState == NetworkManagerActiveConnectionState.deactivating) {
+      return "Disconnecting...";
+    } else if (isConnectionSaved) {
+      return "Saved";
+    }
+    return null;
   }
 
   void _connect(BuildContext context, WidgetRef ref, String ssid, bool isWpa2Protected) async {
     final nm = await ref.read(networkManagerProvider.future);
-    final device = await ref.read(primaryWirelessDeviceProvider.future);
+    final device = ref.read(primaryWirelessDeviceProvider)!;
     final connectionAsyncValue = await AsyncValue.guard(() => ref.read(connectionSettingsBySsidProvider(ssid).future));
     final connection = connectionAsyncValue.mapOrNull(data: (x) => x.value);
 
     if (connection != null) {
-      await nm.activateConnection(device: device, connection: connection, accessPoint: ap);
+      await nm.activateConnection(device: device, connection: connection, accessPoint: network.bestAccessPoint);
       return;
     }
 
@@ -86,27 +119,15 @@ class NetworkTile extends ConsumerWidget {
             },
           },
           device: device,
-          accessPoint: ap,
+          accessPoint: network.bestAccessPoint,
         );
       }
     }
   }
 
-  void _viewConnection() {
-    // TODO
-  }
-}
-
-IconData _getSignalStrengthIconData(int strength) {
-  if (strength <= 20) {
-    return Icons.signal_wifi_0_bar;
-  } else if (strength <= 40) {
-    return Icons.network_wifi_1_bar;
-  } else if (strength <= 60) {
-    return Icons.network_wifi_2_bar;
-  } else if (strength <= 80) {
-    return Icons.network_wifi_3_bar;
-  } else {
-    return Icons.signal_wifi_statusbar_4_bar;
+  void _viewConnectionDetails(BuildContext context, String ssid) {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => NetworkDetails(ssid: ssid),
+    ));
   }
 }

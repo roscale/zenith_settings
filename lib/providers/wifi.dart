@@ -1,35 +1,84 @@
+import 'dart:convert';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:nm/nm.dart';
-import 'package:zenith_settings/providers/devices.dart';
+import 'package:zenith_settings/models/network.dart';
 import 'package:zenith_settings/providers/network_manager.dart';
 
-final wirelessEnabledProvider = StreamProvider<bool>((ref) async* {
-  final nm = await ref.watch(networkManagerProvider.future);
-  yield nm.wirelessEnabled;
-  yield* nm.propertiesChanged.where((propertyNames) => propertyNames.contains('WirelessEnabled')).map((_) {
-    return nm.wirelessEnabled;
-  });
+final wirelessEnabledChangedProvider = StreamProvider((ref) async* {
+  final nm = ref.watch(networkManagerProvider).value!;
+  yield* nm.propertiesChanged.where((propertyNames) => propertyNames.contains('WirelessEnabled'));
 });
 
-final primaryWirelessDeviceProvider = FutureProvider<NetworkManagerDevice>((ref) async {
+final wirelessEnabledProvider = Provider((ref) {
+  ref.watch(wirelessEnabledChangedProvider);
+
+  final nm = ref.watch(networkManagerProvider).value!;
+  return nm.wirelessEnabled;
+});
+
+final primaryWirelessDeviceProvider = Provider<NetworkManagerDevice?>((ref) {
   ref.watch(deviceListChangedProvider);
-  final nm = await ref.watch(networkManagerProvider.future);
-  NetworkManagerDevice device = nm.devices.firstWhere((d) {
-    return d.deviceType == NetworkManagerDeviceType.wifi;
-  });
-  return device;
+  final nm = ref.watch(networkManagerProvider).value!;
+
+  try {
+    return nm.devices.firstWhere((d) {
+      return d.deviceType == NetworkManagerDeviceType.wifi;
+    });
+  } on StateError {
+    return null;
+  }
 });
 
-final availableConnectionsChangedProvider = StreamProvider<List<NetworkManagerSettingsConnection>>((ref) async* {
-  final device = await ref.watch(primaryWirelessDeviceProvider.future);
-  yield device.availableConnections;
-  yield* device.propertiesChanged.where((propertyNames) => propertyNames.contains('AvailableConnections')).map((_) {
-    return device.availableConnections;
-  });
+final _deviceStateChangedProvider = StreamProvider.family<void, NetworkManagerDevice>((ref, device) async* {
+  yield* device.propertiesChanged.where((propertyNames) => propertyNames.contains('State'));
 });
 
-final connectionSettingsCacheProvider = FutureProvider((ref) async {
-  final availableConnections = await ref.watch(availableConnectionsChangedProvider.future);
+final deviceStateProvider = Provider.family<NetworkManagerDeviceState, NetworkManagerDevice>((ref, device) {
+  ref.watch(_deviceStateChangedProvider(device));
+  return device.state;
+});
+
+final _deviceActiveConnectionChangedProvider = StreamProvider.family<void, NetworkManagerDevice>((ref, device) async* {
+  yield* device.propertiesChanged.where((propertyNames) => propertyNames.contains('ActiveConnection'));
+});
+
+final deviceActiveConnectionProvider =
+    Provider.family<NetworkManagerActiveConnection?, NetworkManagerDevice>((ref, device) {
+  ref.watch(_deviceActiveConnectionChangedProvider(device));
+  return device.activeConnection;
+});
+
+final _activeConnectionStateChangedProvider =
+    StreamProvider.family<void, NetworkManagerActiveConnection>((ref, connection) async* {
+  yield* connection.propertiesChanged.where((propertyNames) => propertyNames.contains('State'));
+});
+
+final activeConnectionStateProvider =
+    Provider.family<NetworkManagerActiveConnectionState, NetworkManagerActiveConnection>((ref, connection) {
+  ref.watch(_activeConnectionStateChangedProvider(connection));
+  return connection.state;
+});
+
+final _deviceAvailableConnectionsChangedProvider =
+    StreamProvider.family<void, NetworkManagerDevice>((ref, device) async* {
+  yield* device.propertiesChanged.where((propertyNames) => propertyNames.contains('AvailableConnections'));
+});
+
+final deviceAvailableConnectionsProvider =
+    Provider.family<List<NetworkManagerSettingsConnection>, NetworkManagerDevice>((ref, device) {
+  ref.watch(_deviceAvailableConnectionsChangedProvider(device));
+  return device.availableConnections;
+});
+
+final savedConnectionListChangedProvider = StreamProvider<void>((ref) async* {
+  final nm = ref.watch(networkManagerProvider).value!;
+  yield* nm.settings.propertiesChanged.where((propertyNames) => propertyNames.contains('Connections'));
+});
+
+final connectionSettingsCacheProvider = FutureProvider<Map<String, NetworkManagerSettingsConnection>>((ref) async {
+  ref.watch(savedConnectionListChangedProvider);
+  final nm = ref.watch(networkManagerProvider).value!;
 
   getMapEntry(NetworkManagerSettingsConnection connection) async {
     final settings = await connection.getSettings();
@@ -37,64 +86,68 @@ final connectionSettingsCacheProvider = FutureProvider((ref) async {
     return MapEntry(ssid, connection);
   }
 
-  final futures = availableConnections.map((e) => getMapEntry(e));
+  final futures = nm.settings.connections.map((e) => getMapEntry(e));
   final entries = await Future.wait(futures);
   return Map.fromEntries(entries);
 });
 
 final connectionSettingsBySsidProvider =
-    FutureProvider.family<NetworkManagerSettingsConnection, String>((ref, String ssid) async {
+    FutureProvider.family<NetworkManagerSettingsConnection?, String>((ref, ssid) async {
   final cache = await ref.watch(connectionSettingsCacheProvider.future);
-  return cache[ssid]!;
+  return cache[ssid];
 });
 
-final activeAccessPointProvider = StreamProvider<NetworkManagerAccessPoint?>((ref) async* {
-  final wireless = (await ref.watch(primaryWirelessDeviceProvider.future)).wireless!;
-  yield wireless.activeAccessPoint;
-  yield* wireless.propertiesChanged.where((propertyNames) => propertyNames.contains("ActiveAccessPoint")).map((_) {
-    return wireless.activeAccessPoint;
-  });
+// final activeAccessPointProvider = StreamProvider<NetworkManagerAccessPoint?>((ref) async* {
+//   final wireless = ref.watch(primaryWirelessDeviceProvider).wireless!;
+//   yield wireless.activeAccessPoint;
+//   yield* wireless.propertiesChanged.where((propertyNames) => propertyNames.contains("ActiveAccessPoint")).map((_) {
+//     return wireless.activeAccessPoint;
+//   });
+// });
+
+final scanFinalizedStreamProvider = StreamProvider.family<void, NetworkManagerDeviceWireless>((ref, wireless) async* {
+  yield* wireless.propertiesChanged.where((propertyNames) => propertyNames.contains('LastScan'));
 });
 
-final scanFinalizedStreamProvider = StreamProvider<List<NetworkManagerAccessPoint>>((ref) async* {
-  final wireless = (await ref.watch(primaryWirelessDeviceProvider.future)).wireless!;
-  yield* wireless.propertiesChanged.where((propertyNames) => propertyNames.contains('LastScan')).map((_) {
-    return wireless.accessPoints;
-  });
+final reachableAccessPointsProvider =
+    Provider.family<List<NetworkManagerAccessPoint>, NetworkManagerDeviceWireless>((ref, wireless) {
+  ref.watch(scanFinalizedStreamProvider(wireless));
+  return wireless.accessPoints;
 });
 
-final nearbyAccessPointsProvider = Provider<List<NetworkManagerAccessPoint>>((ref) {
-  final scanFinalized = ref.watch(scanFinalizedStreamProvider);
-  final device = ref.watch(primaryWirelessDeviceProvider);
+final reachableNetworksProvider = Provider.family<Map<String, Network>, NetworkManagerDeviceWireless>((ref, wireless) {
+  var aps = ref.watch(reachableAccessPointsProvider(wireless));
+  aps = aps.where((ap) => ap.ssid.isNotEmpty).toList();
 
-  return scanFinalized.maybeWhen(
-    data: (lastScanResults) => lastScanResults,
-    orElse: () => device.maybeWhen(
-      data: (device) => device.wireless!.accessPoints,
-      orElse: () => [],
-    ),
-  );
+  final networks = <String, Network>{};
+  for (final ap in aps) {
+    final String ssid = utf8.decode(ap.ssid, allowMalformed: true);
+    final network = networks.putIfAbsent(ssid, () => Network(ssid: ssid, accessPoints: []));
+    networks[ssid] = network.copyWith(accessPoints: [...network.accessPoints, ap]);
+  }
+  return networks;
 });
 
-final scanProvider = StateNotifierProvider<ScanNotifier, AsyncValue<void>>((ref) {
-  return ScanNotifier(ref);
+final scanProvider =
+    StateNotifierProvider.family<ScanNotifier, AsyncValue<void>, NetworkManagerDeviceWireless>((ref, wireless) {
+  return ScanNotifier(ref, wireless);
 });
 
 class ScanNotifier extends StateNotifier<AsyncValue<void>> {
   final StateNotifierProviderRef ref;
+  final NetworkManagerDeviceWireless wireless;
 
-  ScanNotifier(this.ref) : super(const AsyncData(null));
+  ScanNotifier(this.ref, this.wireless) : super(const AsyncData(null));
 
   Future<void> scan() async {
     if (state is AsyncLoading) {
+      // Don't start a scan if one is already in progress.
       return;
     }
     state = const AsyncLoading();
     state = await AsyncValue.guard(() async {
-      final wireless = (await ref.read(primaryWirelessDeviceProvider.future)).wireless!;
-
       await wireless.requestScan();
-      await ref.read(scanFinalizedStreamProvider.stream).first;
+      await ref.read(scanFinalizedStreamProvider(wireless).stream).first;
     });
   }
 }

@@ -1,6 +1,9 @@
+import 'package:dbus/dbus.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:zenith_settings/providers/network_manager.dart';
 import 'package:zenith_settings/settings_tile.dart';
 import 'package:zenith_settings/wifi/wifi.dart';
 
@@ -62,8 +65,19 @@ class SettingsList extends StatelessWidget {
                 icon: Icons.wifi,
                 title: "Network & internet",
                 subTitle: "Wi-Fi",
-                onTap: () {
-                  Navigator.of(context).push(MaterialPageRoute(builder: (_) => const WiFi()));
+                onTap: () async {
+                  final navigator = Navigator.of(context);
+                  try {
+                    // Preload the network manager client before continuing because other network providers assume
+                    // it is ready to use.
+                    await ref.read(networkManagerProvider.future);
+                    navigator.push(WiFi.route);
+                  } on DBusErrorException {
+                    ref.invalidate(networkManagerProvider);
+                    if (kDebugMode) {
+                      print("NetworkManager not available");
+                    }
+                  }
                 },
               ),
               SettingsTile(
