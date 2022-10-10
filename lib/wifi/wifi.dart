@@ -32,31 +32,33 @@ class _WiFiState extends ConsumerState<WiFi> {
       appBar: AppBar(
         title: const Text("Network & internet"),
       ),
-      body: Builder(builder: (context) {
-        final wirelessDevice = ref.watch(primaryWirelessDeviceProvider)?.wireless;
-        if (wirelessDevice == null) {
-          return Center(
-            child: Text(
-              "No wireless device available",
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
+      body: Consumer(
+        builder: (BuildContext context, WidgetRef ref, __) {
+          final wirelessDevice = ref.watch(primaryWirelessDeviceProvider)?.wireless;
+          if (wirelessDevice == null) {
+            return Center(
+              child: Text(
+                "No wireless device available",
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+            );
+          }
+
+          AsyncValue scan = ref.watch(scanProvider(wirelessDevice));
+
+          return ListView(
+            children: [
+              scan.maybeWhen(
+                loading: () => const LinearProgressIndicator(minHeight: 4),
+                orElse: () => const SizedBox(height: 4),
+              ),
+              const ToggleWiFi(),
+              const Divider(height: 0),
+              const NetworkList(),
+            ],
           );
-        }
-
-        AsyncValue scan = ref.watch(scanProvider(wirelessDevice));
-
-        return ListView(
-          children: [
-            scan.maybeWhen(
-              loading: () => const LinearProgressIndicator(minHeight: 4),
-              orElse: () => const SizedBox(height: 4),
-            ),
-            const ToggleWiFi(),
-            const Divider(height: 0),
-            const NetworkList(),
-          ],
-        );
-      }),
+        },
+      ),
     );
   }
 }

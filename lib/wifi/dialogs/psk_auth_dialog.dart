@@ -1,18 +1,18 @@
 import 'package:flutter/material.dart';
 
-class WpaAuthDialog extends StatefulWidget {
+class PskAuthDialog extends StatefulWidget {
   final String apName;
 
-  const WpaAuthDialog({
+  const PskAuthDialog({
     Key? key,
     required this.apName,
   }) : super(key: key);
 
   @override
-  State<WpaAuthDialog> createState() => _WpaAuthDialogState();
+  State<PskAuthDialog> createState() => _PskAuthDialogState();
 }
 
-class _WpaAuthDialogState extends State<WpaAuthDialog> {
+class _PskAuthDialogState extends State<PskAuthDialog> {
   late final TextEditingController passwordTextController;
   late final FocusNode passwordTextFieldFocusNode;
   bool showPassword = false;

@@ -5,9 +5,10 @@ import 'package:nm/nm.dart';
 import 'package:zenith_settings/models/network.dart';
 import 'package:zenith_settings/providers/network_manager.dart';
 import 'package:zenith_settings/providers/wifi.dart';
+import 'package:zenith_settings/wifi/dialogs/psk_auth_dialog.dart';
+import 'package:zenith_settings/wifi/dialogs/unsupported_network_dialog.dart';
 import 'package:zenith_settings/wifi/network_details.dart';
 import 'package:zenith_settings/wifi/util.dart';
-import 'package:zenith_settings/wifi/wpa_auth_dialog.dart';
 
 class NetworkTile extends ConsumerWidget {
   final Network network;
@@ -29,8 +30,7 @@ class NetworkTile extends ConsumerWidget {
 
     final ap = network.bestAccessPoint;
 
-    final bool isProtected = ap.rsnFlags.isNotEmpty || ap.wpaFlags.isNotEmpty;
-    final bool isWpa2Protected = ap.rsnFlags.isNotEmpty;
+    List<NetworkManagerWifiAccessPointSecurityFlag> securityFlags = ap.rsnFlags.isNotEmpty ? ap.rsnFlags : ap.wpaFlags;
 
     final bool isConnectionSaved = ref.watch(connectionSettingsBySsidProvider(network.ssid)).asData?.value != null;
 
@@ -57,7 +57,7 @@ class NetworkTile extends ConsumerWidget {
         Icons.settings_outlined,
         color: Theme.of(context).indicatorColor,
       );
-    } else if (isProtected) {
+    } else if (securityFlags.isNotEmpty) {
       trailingIcon = const Icon(Icons.lock_outline_rounded);
     }
 
@@ -69,7 +69,7 @@ class NetworkTile extends ConsumerWidget {
       minVerticalPadding: 15,
       onTap: () => isActive
           ? _viewConnectionDetails(context, network.ssid)
-          : _connect(context, ref, network.ssid, isWpa2Protected),
+          : _connect(context, ref, network.ssid, securityFlags),
     );
   }
 
@@ -94,21 +94,32 @@ class NetworkTile extends ConsumerWidget {
     return null;
   }
 
-  void _connect(BuildContext context, WidgetRef ref, String ssid, bool isWpa2Protected) async {
+  void _connect(
+    BuildContext context,
+    WidgetRef ref,
+    String ssid,
+    List<NetworkManagerWifiAccessPointSecurityFlag> securityFlags,
+  ) async {
     final nm = await ref.read(networkManagerProvider.future);
     final device = ref.read(primaryWirelessDeviceProvider)!;
-    final connectionAsyncValue = await AsyncValue.guard(() => ref.read(connectionSettingsBySsidProvider(ssid).future));
-    final connection = connectionAsyncValue.mapOrNull(data: (x) => x.value);
+    final connection = await ref.read(connectionSettingsCacheProvider.selectAsync((cache) => cache[ssid]));
 
     if (connection != null) {
       await nm.activateConnection(device: device, connection: connection, accessPoint: network.bestAccessPoint);
       return;
     }
 
-    if (isWpa2Protected) {
+    if (securityFlags.isEmpty) {
+      // Open wireless network.
+      await nm.addAndActivateConnection(
+        device: device,
+        accessPoint: network.bestAccessPoint,
+      );
+    } else if (securityFlags.contains(NetworkManagerWifiAccessPointSecurityFlag.keyManagementPsk)) {
+      // Pre-shared key.
       final String? password = await showDialog<String>(
         context: context,
-        builder: (_) => WpaAuthDialog(apName: ssid),
+        builder: (_) => PskAuthDialog(apName: ssid),
       );
       if (password != null) {
         await nm.addAndActivateConnection(
@@ -122,6 +133,11 @@ class NetworkTile extends ConsumerWidget {
           accessPoint: network.bestAccessPoint,
         );
       }
+    } else {
+      await showDialog<String>(
+        context: context,
+        builder: (_) => const UnsupportedNetworkDialog(),
+      );
     }
   }
 
